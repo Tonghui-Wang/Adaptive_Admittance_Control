@@ -1,0 +1,7 @@
+A second-order spring damping system is implemented through admittance control, which is applied to the flexible control of the robotic arm in response to external force disturbances during trajectory tracking.  
+At the same time, using particle swarm optimization algorithm, adaptive parameter adjustment of admittance control coefficient is achieved, making admittance control easier to use and reducing debugging difficulty.  
+This repository is based on the data model of the Naiwei robot ECR5, and has provided two code implementation methods based on Matlab and Python. Computer simulation has been completed, but functional implementation has not yet been tested.  
+
+References:
+[1]王博,闫军,侯倩倩,等.基于粒子群算法的弹簧-阻尼系统PID控制器优化设计[J].计算机科学, 2015, 42(B11):3.DOI:CNKI:SUN:JSJA.0.2015-S2-121.  
+[2]姜涛毕建民.基于模糊RBF导纳控制的恒力打磨技术研究[J].长春理工大学学报:自然科学版, 2022, 45(5):67-73.  
