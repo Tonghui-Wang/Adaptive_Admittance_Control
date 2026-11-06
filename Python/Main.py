@@ -1,247 +1,188 @@
-import numpy as np
-from math import pi
-import roboticstoolbox as rtb
+"""Run the ECR5 constant-force contour and compare admittance tunings.
+
+The tool approaches a virtual plane, holds 10 N, then keeps that force after
+the surface stiffness jumps. Outputs are written as PNG files.
+"""
+
+import argparse
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import font_manager
 
-def Main():
+import control
+import robot_model
 
-    # 1. MDH建模
-    a = np.array([0, 150, 750, 155, 0, 0])/1000
-    alpha = np.array([0, pi/2, 0, pi/2, -pi/2, pi/2])
-    d = np.array([253, 0, 0, 800, 0, 154])/1000
-    theta = np.array([0, pi/2, 0, 0, -pi/2, 0])
+font_manager.fontManager.addfont("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")
+plt.rcParams["font.sans-serif"] = ["WenQuanYi Micro Hei"]
+plt.rcParams["axes.unicode_minus"] = False
 
-    ecr5 = Model(a=a, alpha=alpha, d=d, theta=theta)
-
-    # 2. 期望轨迹规划
-    jpoints=np.array([[10,20,30,40,50,60],
-                    [-5,-10,-15,-20,-25,-30],
-                    [35,-20,25,-30,35,-50]])    # 确定的关节途径点
-    dt=0.01 # 任务周期，s
-    
-    q_d, dq_d, ddq_d = Planner(point=jpoints, dt=dt)    # 期望轨迹规划，位移、速度、加速度
-
-    # 3. 实际轨迹导纳
-    n,m = q_d.shape
-    f=np.zeros((n,m))   #末端的各方向外力
-    ff=np.linspace(0,10,50)
-    ff=np.concatenate((ff,ff[::-1]))
-    f[50:50+2*50,2]=ff
-
-    q_r=np.zeros((n,m)) # 实际位移
-    dq_r=np.zeros((n,m))    # 实际速度
-    ddq_r=np.zeros((n,m))   # 实际加速度
-    q_r[0,:]=q_d[0,:]
-    dq_r[0,:]=dq_d[0,:]
-    ddq_r[0,:]=ddq_d[0,:]
-
-    for i in range(n-1):
-        # 根据理论坐标计算雅可比矩阵，再根据雅可比矩阵和末端外力计算关节力矩偏差
-        # tau=np.dot(ecr5.jacob0(q_d[i,:]).T, f[i,:].T)
-        tau=np.dot(f[i,:], ecr5.jacob0(q_d[i,:]))
-
-        # 通过粒子群算法，求取导纳控制的最优控制参数，实现自适应效果
-        param=Apso(x_di=q_d[i,:], dx_di=dq_d[i,:], ddx_di=ddq_d[i,:],
-                x_ri=q_r[i,:], dx_ri=dq_r[i,:], f=tau.T, dt=dt,
-                x_dii=q_d[i+1,:], dx_dii=dq_d[i+1,:], ddx_dii=ddq_d[i+1,:])
-
-        # 通过导纳控制，求取下一任务时刻的实际轨迹
-        shi,vel,acc=Impedence(x_d=q_d[i,:], dx_d=dq_d[i,:], ddx_d=ddq_d[i,:], 
-                        x_r=q_r[i,:], dx_r=dq_r[i,:], f=tau.T, dt=dt, param=param)
-
-        q_r[i+1,:]=shi
-        dq_r[i+1,:]=vel
-        ddq_r[i,:]=acc
-
-    # 4. 柔顺效果展示
-    i=range(n)
-
-    plt.figure(1)
-    plt.suptitle('shift')
-    plt.subplot(611)
-    plt.plot(i,q_d[:,0],'r--', i,q_r[:,0],'b:', i,q_r[:,0]-q_d[:,0],'g-')
-    plt.subplot(612)
-    plt.plot(i,q_d[:,1],'r--', i,q_r[:,1],'b:', i,q_r[:,1]-q_d[:,1],'g-')
-    plt.subplot(613)
-    plt.plot(i,q_d[:,2],'r--', i,q_r[:,2],'b:', i,q_r[:,2]-q_d[:,2],'g-')
-    plt.subplot(614)
-    plt.plot(i,q_d[:,3],'r--', i,q_r[:,3],'b:', i,q_r[:,3]-q_d[:,3],'g-')
-    plt.subplot(615)
-    plt.plot(i,q_d[:,4],'r--', i,q_r[:,4],'b:', i,q_r[:,4]-q_d[:,4],'g-')
-    plt.subplot(616)
-    plt.plot(i,q_d[:,5],'r--', i,q_r[:,5],'b:', i,q_r[:,5]-q_d[:,5],'g-')
-
-    plt.figure(2)
-    plt.suptitle('velocity')
-    plt.subplot(611)
-    plt.plot(i,dq_d[:,0],'r--', i,dq_r[:,0],'b:', i,dq_r[:,0]-dq_d[:,0],'g-')
-    plt.subplot(612)
-    plt.plot(i,dq_d[:,1],'r--', i,dq_r[:,1],'b:', i,dq_r[:,1]-dq_d[:,1],'g-')
-    plt.subplot(613)
-    plt.plot(i,dq_d[:,2],'r--', i,dq_r[:,2],'b:', i,dq_r[:,2]-dq_d[:,2],'g-')
-    plt.subplot(614)
-    plt.plot(i,dq_d[:,3],'r--', i,dq_r[:,3],'b:', i,dq_r[:,3]-dq_d[:,3],'g-')
-    plt.subplot(615)
-    plt.plot(i,dq_d[:,4],'r--', i,dq_r[:,4],'b:', i,dq_r[:,4]-dq_d[:,4],'g-')
-    plt.subplot(616)
-    plt.plot(i,dq_d[:,5],'r--', i,dq_r[:,5],'b:', i,dq_r[:,5]-dq_d[:,5],'g-')
-
-    plt.figure(3)
-    plt.suptitle('accelerate')
-    plt.subplot(611)
-    plt.plot(i,ddq_d[:,0],'r--', i,ddq_r[:,0],'b:', i,ddq_r[:,0]-ddq_d[:,0],'g:')
-    plt.subplot(612)
-    plt.plot(i,ddq_d[:,1],'r--', i,ddq_r[:,1],'b:', i,ddq_r[:,1]-ddq_d[:,1],'g:')
-    plt.subplot(613)
-    plt.plot(i,ddq_d[:,2],'r--', i,ddq_r[:,2],'b:', i,ddq_r[:,2]-ddq_d[:,2],'g-')
-    plt.subplot(614)
-    plt.plot(i,ddq_d[:,3],'r--', i,ddq_r[:,3],'b:', i,ddq_r[:,3]-ddq_d[:,3],'g-')
-    plt.subplot(615)
-    plt.plot(i,ddq_d[:,4],'r--', i,ddq_r[:,4],'b:', i,ddq_r[:,4]-ddq_d[:,4],'g-')
-    plt.subplot(616)
-    plt.plot(i,ddq_d[:,5],'r--', i,ddq_r[:,5],'b:', i,ddq_r[:,5]-ddq_d[:,5],'g-')
-
-    plt.figure(4)
-    plt.title('trajectory')
-    ax = plt.axes(projection='3d')
-    p_d=np.zeros((n,3)) # 期望末端轨迹XYZ
-    p_r=np.zeros((n,3)) # 实际末端轨迹XYZ
-    for i in range(n):
-        p_d[i,:]=ecr5.fkine(q_d[i,:]).t
-        p_r[i,:]=ecr5.fkine(q_r[i,:]).t
-    ax.plot3D(p_d[:,0],p_d[:,1],p_d[:,2], 'r--')
-    ax.plot3D(p_r[:,0],p_r[:,1],p_r[:,2], 'b:')
-    # ax.set_xlabel('x')
-    # ax.set_ylabel('y')
-    # ax.set_zlabel('z')
-
-    plt.show(block=True)
+MODES = ("adaptive", "fixed", "heavy", "light")
+LABELS = {
+    "adaptive": "自适应",
+    "fixed": "固定中等",
+    "heavy": "固定偏重",
+    "light": "固定偏轻",
+}
+COLORS = {
+    "adaptive": "#0b6e4f",
+    "fixed": "#1f4e79",
+    "heavy": "#b85c38",
+    "light": "#7a6a9a",
+}
 
 
-# MDH建模
-# 输入DH参数，输出robot对象
-def Model(a, alpha, d, theta):
-    links=[]
-    for i in range(6):
-        l=rtb.RevoluteMDH(d=d[i], a=a[i], alpha=alpha[i], offset=theta[i])
-        links.append(l)
-
-    return rtb.DHRobot(links, name='ECR5')
+def rmse(result, start, stop):
+    mask = (result["t"] >= start) & (result["t"] < stop)
+    error = result["force"][mask] - result["force_des"][mask]
+    return float(np.sqrt(np.mean(error ** 2)))
 
 
-# 关节轨迹规划
-# 输入途径点序列和任务周期时间，输出插补后的轨迹(位移 速度 加速度)
-def Planner(point, dt):
-    point=point*pi/180
-    traj = rtb.mstraj(viapoints=point, dt=dt, tacc=0.5, qdmax=[0.5]*6)  # 多段多轴轨迹插补
-    n,m=traj.q.shape
-
-    q_d=traj.q
-    dq_d=np.zeros((n,m))
-    ddq_d=np.zeros((n,m))
-    for i in range(1,n):
-        dq_d[i-1,:]=(q_d[i,:]-q_d[i-1,:])/dt    # 速度计算
-    for i in range(1,n):
-        ddq_d[i-1,:]=(dq_d[i,:]-dq_d[i-1,:])/dt # 加速度计算
-
-    return q_d, dq_d, ddq_d
-
-# 粒子群算法(优化自适应惯性权重)
-# *******************************
-# 输入：
-# x_di dx_di ddx_di：i时刻期望位移 速度 加速度
-# x_ri dx_ri：i时刻实际位移 速度
-# f：i时刻各关节力矩偏差
-# dt：采样间隔
-# x_dii dx_dii ddx_dii：i+1时刻实际位移 速度 加速度
-# *******************************
-# 输出：
-# gbest：导纳最优参数(m b k)
-def Apso(x_di, dx_di, ddx_di, x_ri, dx_ri, f, dt, x_dii, dx_dii, ddx_dii):
-
-    # 初始化
-    step=15 # 进化次数
-    n=20    # 种群规模
-    m=3 # 粒子维度,即目标函数的自变量个数
-    xlimit=np.array([[1,1,1],[20,100,500]])  # 目标函数自变量的取值范围
-    vmax=np.array([1,2,3])    # 最大进化速度
-    cost=np.array([np.inf]*n)   # 个体适应度代价
-    pbest=np.zeros((n,m))    # 个体最值
-    gbest=np.zeros((1,m))    # 群体最值
-    particle=np.zeros((n,2,m)); # n个粒子，粒子每行分别表示位置、速度，每列对应一个自变量的迭代值
-    for i in range(n):
-        particle[i,0,:]=np.random.rand(1,m)*(xlimit[1,:]-xlimit[0,:]) + xlimit[0,:]
-        particle[i,1,:]=np.random.rand(1,m)*vmax
-
-    #step迭代
-    for k in range(step):
-        # 适应度评价
-        for i in range(n):   # 循环n个粒子
-            shi,vel,acc=Impedence(x_di, dx_di, ddx_di, x_ri, dx_ri, f, dt, particle[i,0,:])    # (i+1)t时刻的实际轨迹方案
-            error=np.linalg.norm(shi-x_dii) + np.linalg.norm(vel-dx_dii) + np.linalg.norm(acc-ddx_dii) # 计算粒子当前代价
-            if error < cost[i]:  # 粒子当前代价小于粒子最小代价
-                cost[i]=error   # 更新粒子最小代价
-                pbest[i,:]=particle[i,0,:]   # 更新粒子最优位置
-        i=np.argmin(cost)   # 找到最小代价索引
-        gbest=pbest[i,:]    # 将最小代价的个体最优位置赋值给群体最优位置
-    
-        # 个体进化
-        c1=1.5  # 自身认知系数
-        c2=1.5  # 群体认知系数
-        wlimit=np.array([0.4, 0.9]) # 惯性权重的取值范围
-        costavg=np.mean(cost)  # 代价平均值
-        costmin=np.min(cost)    # 代价最小值
-        
-        for i in range(n):
-            # 自适应惯性权重计算
-            if cost[i]>costavg:
-                w=wlimit[1]
-            elif costavg-costmin==0:
-                w=wlimit[0]+np.random.rand()*(wlimit[1]-wlimit[0])
-            else:
-                w=wlimit[0]+(wlimit[1]-wlimit[0])*(cost[i]-costmin)/(costavg-costmin)
-            
-            particle[i,1,:]=w*particle[i,1,:] + c1*np.random.rand(1,3)*pbest[i,:] + c2*np.random.rand(1,3)*gbest  # 个体速度进化
-            particle[i,1,:]=np.minimum(particle[i,1,:], vmax)   # 最大速度进化约束
-            particle[i,0,:]=particle[i,0,:] + particle[i,1,:]   # 个体位置进化
-            particle[i,0,:]=np.maximum(particle[i,0,:], xlimit[0,:])    # 最小位置进化约束
-            particle[i,0,:]=np.minimum(particle[i,0,:], xlimit[1,:])   # 最大速度进化约束
-    
-    return gbest
+def run(out_dir):
+    robot = robot_model.make_robot()
+    reference = control.plan(robot, control.default_via_points())
+    normal, plane_point = control.fit_plane(reference["p"])
+    runs = {
+        mode: control.simulate(robot, reference, normal, plane_point, mode=mode, seed=7)
+        for mode in MODES
+    }
+    duration = float(reference["t"][-1])
+    switch = 0.5 * duration
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_metrics(out_dir / "metrics.txt", runs, switch)
+    plot_force(out_dir / "force.png", runs, switch)
+    plot_gains(out_dir / "gains.png", runs["adaptive"], switch)
+    plot_tangent(out_dir / "tangent.png", runs, switch)
+    plot_path(out_dir / "path.png", runs["adaptive"], normal, plane_point)
+    return runs, switch
 
 
-# 导纳控制
-# *******************************
-# 输入：
-# x_d dx_d ddx_d：i时刻期望位移 速度 加速度
-# x_r dx_r：i时刻实际位移 速度
-# f：i时刻各关节力矩偏差
-# dt：采样间隔
-# param：控制参数(m b k)
-# *******************************
-# 输出：
-# x_r dx_r ddx_r：i+1时刻实际位移 i+1时刻实际速度 i时刻实际加速度
-def Impedence(x_d, dx_d, ddx_d, x_r, dx_r, f, dt, param):
-
-    # 阻抗模型f = m*(ddx_d-ddx_r) + b*(dx_d-dx_r) + k*(x_d-x_r)
-    # m,b,k分别为质量 阻尼 刚度
-    # m=1
-    # b=5
-    # k=10
-    m=param[0]
-    b=param[1]
-    k=param[2]
-
-    ddx_r = ddx_d + (b*(dx_d-dx_r) + k*(x_d-x_r) - f)/m #n*t时刻
-    x_r = x_r + dx_r * dt   #(n+1)*t时刻
-    dx_r = dx_r + ddx_r * dt    #(n+1)*t时刻
-
-    x_r=np.array([x_r])
-    dx_r=np.array([dx_r])
-    ddx_r=np.array([ddx_r])
-
-    return x_r, dx_r, ddx_r
+def write_metrics(path, runs, switch):
+    lines = [
+        "ECR5 恒力轮廓跟踪",
+        f"刚度在 t={switch:.2f}s 从 {control.K_SOFT:.0f} N/m 跳到 {control.K_STIFF:.0f} N/m",
+        "",
+        f"{'模式':<10}{'稳态力RMSE(N)':>16}{'跳变后1s RMSE':>16}{'切向RMSE(mm)':>16}",
+    ]
+    for mode in MODES:
+        result = runs[mode]
+        steady = rmse(result, 1.0, switch)
+        recover = rmse(result, switch, switch + 1.0)
+        tangent = 1000.0 * float(np.sqrt(np.mean(result["tangent"] ** 2)))
+        lines.append(f"{LABELS[mode]:<10}{steady:16.3f}{recover:16.3f}{tangent:16.2f}")
+    adaptive = runs["adaptive"]
+    lines.append("")
+    lines.append(
+        f"自适应增益 起止 m={adaptive['m'][0]:.2f}->{adaptive['m'][-1]:.2f}  "
+        f"b={adaptive['b'][0]:.1f}->{adaptive['b'][-1]:.1f}"
+    )
+    lines.append(
+        f"刚度估计 接触后约 {adaptive['k_hat'][int(2.0 / control.DT)]:.0f} N/m，"
+        f"结束 {adaptive['k_hat'][-1]:.0f} N/m"
+    )
+    text = "\n".join(lines) + "\n"
+    path.write_text(text, encoding="utf-8")
+    print(text, end="")
 
 
-if __name__ == '__main__':    # pragma nocover
-    Main()
+def plot_force(path, runs, switch):
+    figure, axis = plt.subplots(figsize=(9, 4.2))
+    desired = runs["adaptive"]
+    axis.plot(desired["t"], desired["force_des"], "k--", lw=1.2, label="期望力")
+    for mode in MODES:
+        result = runs[mode]
+        axis.plot(result["t"], result["force"], color=COLORS[mode], lw=1.3, label=LABELS[mode])
+    axis.axvline(switch, color="#888888", ls=":", lw=1)
+    axis.set_xlabel("时间 (s)")
+    axis.set_ylabel("法向接触力 (N)")
+    axis.set_title("接触力")
+    axis.legend(ncol=3, frameon=False)
+    axis.set_xlim(0, desired["t"][-1])
+    figure.tight_layout()
+    figure.savefig(path, dpi=140)
+    plt.close(figure)
+
+
+def plot_gains(path, result, switch):
+    figure, axes = plt.subplots(3, 1, figsize=(9, 6.2), sharex=True)
+    axes[0].plot(result["t"], result["m"], color=COLORS["adaptive"])
+    axes[0].set_ylabel("质量 m (kg)")
+    axes[1].plot(result["t"], result["b"], color=COLORS["adaptive"])
+    axes[1].set_ylabel("阻尼 b (N·s/m)")
+    axes[2].plot(result["t"], result["k_true"], color="#888888", ls="--", label="真实刚度")
+    axes[2].plot(result["t"], result["k_hat"], color=COLORS["adaptive"], label="估计刚度")
+    axes[2].set_ylabel("刚度 (N/m)")
+    axes[2].set_xlabel("时间 (s)")
+    axes[2].legend(frameon=False)
+    for axis in axes:
+        axis.axvline(switch, color="#888888", ls=":", lw=1)
+    axes[0].set_title("法向导纳参数与刚度估计")
+    figure.tight_layout()
+    figure.savefig(path, dpi=140)
+    plt.close(figure)
+
+
+def plot_tangent(path, runs, switch):
+    figure, axis = plt.subplots(figsize=(9, 3.6))
+    for mode in MODES:
+        result = runs[mode]
+        axis.plot(result["t"], result["tangent"] * 1000.0, color=COLORS[mode], lw=1.2, label=LABELS[mode])
+    axis.axvline(switch, color="#888888", ls=":", lw=1)
+    axis.set_xlabel("时间 (s)")
+    axis.set_ylabel("切向误差 (mm)")
+    axis.set_title("路径切向误差")
+    axis.legend(ncol=4, frameon=False)
+    figure.tight_layout()
+    figure.savefig(path, dpi=140)
+    plt.close(figure)
+
+
+def plot_path(path, result, normal, plane_point):
+    figure = plt.figure(figsize=(6.4, 5.2))
+    axis = figure.add_subplot(111, projection="3d")
+    desired = result["p_ref"]
+    actual = result["position"]
+    axis.plot(desired[:, 0], desired[:, 1], desired[:, 2], color="#b85c38", ls="--", label="期望路径")
+    axis.plot(actual[:, 0], actual[:, 1], actual[:, 2], color=COLORS["adaptive"], label="实际路径")
+    tangent = np.eye(3) - np.outer(normal, normal)
+    axis_u = tangent @ np.array([1.0, 0.0, 0.0])
+    if np.linalg.norm(axis_u) < 0.2:
+        axis_u = tangent @ np.array([0.0, 1.0, 0.0])
+    axis_u = axis_u / np.linalg.norm(axis_u)
+    axis_v = np.cross(normal, axis_u)
+    relative = actual - plane_point
+    coord_u = relative @ axis_u
+    coord_v = relative @ axis_v
+    pad = 0.03
+    uu, vv = np.meshgrid(
+        np.linspace(coord_u.min() - pad, coord_u.max() + pad, 2),
+        np.linspace(coord_v.min() - pad, coord_v.max() + pad, 2),
+    )
+    plane = plane_point + uu[..., None] * axis_u + vv[..., None] * axis_v
+    axis.plot_surface(
+        plane[:, :, 0], plane[:, :, 1], plane[:, :, 2],
+        color="#9fb3c8", alpha=0.35, linewidth=0,
+    )
+    axis.set_xlabel("x (m)")
+    axis.set_ylabel("y (m)")
+    axis.set_zlabel("z (m)")
+    axis.set_title("末端路径与工作平面")
+    axis.legend(frameon=False)
+    figure.tight_layout()
+    figure.savefig(path, dpi=140)
+    plt.close(figure)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="ECR5 自适应导纳恒力仿真")
+    parser.add_argument("--out", type=Path, default=Path("output"))
+    args = parser.parse_args()
+    run(args.out)
+
+
+if __name__ == "__main__":
+    main()

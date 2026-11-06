@@ -1,20 +1,21 @@
-function [x_d,dx_d,ddx_d] = Planner(point, dt)
-
-segments=deg2rad(point);%途经点
-qdmax=[0.3, 0.4, 0.5, 0.6, 0.4, 0.3];%最大速度
-tsegment=[];%每段运行时间
-q0=[];%起点各轴坐标
-tacc=0.5;%抛物线过渡时间
-
-x_d= mstraj(segments, qdmax, tsegment, q0, dt, tacc);
-
-[n,m]=size(x_d);
-dx_d=zeros(n,m);
-ddx_d=zeros(n,m);
-for i =1:n-1
-    dx_d(i,:)=(x_d(i+1,:)-x_d(i,:))/dt;
+function [q, qd, qdd] = Planner(viaDeg, dt)
+%Joint-space multi-segment trajectory.
+%Central differences are used at the ends as well, so the last sample is
+%not differenced against an implicit zero.
+via = deg2rad(viaDeg);
+qdmax = 0.5 * ones(1, 6);
+q = mstraj(via, qdmax, [], [], dt, 0.5);
+n = size(q, 1);
+qd = zeros(n, 6);
+qdd = zeros(n, 6);
+qd(1, :) = (q(2, :) - q(1, :)) / dt;
+qd(n, :) = (q(n, :) - q(n - 1, :)) / dt;
+for i = 2:n - 1
+    qd(i, :) = (q(i + 1, :) - q(i - 1, :)) / (2 * dt);
 end
-for i =1:n-1
-    ddx_d(i,:)=(dx_d(i+1,:)-dx_d(i,:))/dt;
+qdd(1, :) = (qd(2, :) - qd(1, :)) / dt;
+qdd(n, :) = (qd(n, :) - qd(n - 1, :)) / dt;
+for i = 2:n - 1
+    qdd(i, :) = (qd(i + 1, :) - qd(i - 1, :)) / (2 * dt);
 end
 end
