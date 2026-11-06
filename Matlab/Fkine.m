@@ -1,42 +1,26 @@
-function [p]=Fkine(q)
+function [T, frames] = Fkine(q)
+%Forward kinematics of ECR5 with modified DH.
+%q is 1x6 in radians. T is 4x4 in metres. frames{1} is the base.
+a = [0, 0.150, 0.750, 0.155, 0, 0];
+alpha = [0, pi / 2, 0, pi / 2, -pi / 2, pi / 2];
+d = [0.253, 0, 0, 0.800, 0, 0.154];
+offset = [0, pi / 2, 0, 0, -pi / 2, 0];
+T = eye(4);
+frames = cell(1, 7);
+frames{1} = T;
+for i = 1:6
+    T = T * mdh(a(i), alpha(i), d(i), q(i) + offset(i));
+    frames{i + 1} = T;
+end
+end
 
-a1=150;
-a2=750;
-a3=155;
-d1=253;
-d4=800;
-d6=154;
-
-s1=sind(q(1));
-s2=sind(q(2));
-s23=sind(q(2)+q(3));
-s4=sind(q(4));
-s5=sind(q(5));
-s6=sind(q(6));
-c1=cosd(q(1));
-c2=cosd(q(2));
-c23=cosd(q(2)+q(3));
-c4=cosd(q(4));
-c5=cosd(q(5));
-c6=cosd(q(6));
-
-nx=c6*(c1*c23*c5 + s5*(-c1*c4*s23 + s1*s4)) + s6*(c1*s23*s4 + c4*s1);
-ox=c6*(c1*s23*s4 + c4*s1) - s6*(c1*c23*c5 + s5*(-c1*c4*s23 + s1*s4));
-ax=c1*c23*s5 - c5*(-c1*c4*s23 + s1*s4);
-px=c1*(a1 - a2*s2 - a3*s23 + c23*d4) - d6*(-c1*c23*s5 + c5*(-c1*c4*s23 + s1*s4));
-ny=-c6*(-c23*c5*s1 + s5*(c1*s4 + c4*s1*s23)) + s6*(-c1*c4 + s1*s23*s4);
-oy=c6*(-c1*c4 + s1*s23*s4) + s6*(-c23*c5*s1 + s5*(c1*s4 + c4*s1*s23));
-ay=c23*s1*s5 + c5*(c1*s4 + c4*s1*s23);
-py=d6*(c23*s1*s5 + c5*(c1*s4 + c4*s1*s23)) + s1*(a1 - a2*s2 - a3*s23 + c23*d4);
-nz=-c23*s4*s6 + c6*(c23*c4*s5 + c5*s23);
-oz=-c23*c6*s4 - s6*(c23*c4*s5 + c5*s23);
-az=-c23*c4*c5 + s23*s5;
-pz=a2*c2 + a3*c23 + d1 + d4*s23 + d6*(-c23*c4*c5 + s23*s5);
-
-T=[nx,ox,ax,px;
-    ny,oy,ay,py;
-    nz,oz,az,pz;
-    0,0,0,1];
-
-p=[T(1:3,4)',rad2deg(tform2eul(T,'ZYX'))];
+function A = mdh(a, alpha, d, theta)
+ca = cos(alpha);
+sa = sin(alpha);
+ct = cos(theta);
+st = sin(theta);
+A = [ct, -st, 0, a;
+     st * ca, ct * ca, -sa, -sa * d;
+     st * sa, ct * sa, ca, ca * d;
+     0, 0, 0, 1];
 end
